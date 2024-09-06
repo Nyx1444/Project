@@ -113,49 +113,51 @@ app.post('/register', [
         });
     }
 });
-// End register page
 
 // Login page
 app.post('/', ifLoggedin, [
-    body('user_id').trim().not().isEmpty().withMessage('User ID cannot be empty!').custom((value) => {
-        console.log('Received Login User ID:', value); // Debugging
-        return dbConnection.execute('SELECT user_id FROM users WHERE user_id=?', [value])
+    // ตรวจสอบว่า id_number ไม่ว่างและถูกต้อง
+    body('id_number').trim().not().isEmpty().withMessage('ID Number cannot be empty!').custom((value) => {
+        console.log('Received Login ID Number:', value); // Debugging
+        return dbConnection.execute('SELECT id_number FROM users WHERE id_number=?', [value])
         .then(([rows]) => {
             if(rows.length === 1){
                 return true;
             }
-            return Promise.reject('Invalid User ID!');
+            return Promise.reject('Invalid ID Number!');
         });
     }),
-    body('user_password').trim().not().isEmpty().withMessage('Password is empty!'),
+    body('password').trim().not().isEmpty().withMessage('Password is empty!'),
 ], (req, res, next) => {
     const validation_result = validationResult(req);
-    const { user_password, user_id } = req.body;
+    const { password, id_number } = req.body;
 
     console.log('Login Request Body:', req.body); // Debugging
 
     if(validation_result.isEmpty()){
-        dbConnection.execute("SELECT * FROM `users` WHERE `user_id`=?", [user_id])
+        // ดึงข้อมูลผู้ใช้จากฐานข้อมูลตาม id_number
+        dbConnection.execute("SELECT * FROM `users` WHERE `id_number`=?", [id_number])
         .then(([rows]) => {
             console.log('Query Result:', rows); // Log complete result to check structure
 
             if (rows.length > 0) {
-                const hashedPassword = rows[0].user_password;
+                const hashedPassword = rows[0].password;  // เปลี่ยนเป็น `password`
                 console.log('Hashed Password from DB:', hashedPassword); // Debugging
                 
-                // Ensure `user_password` and `hashedPassword` are not undefined or null
-                if (!user_password || !hashedPassword) {
-                    console.error('Error: user_password or hashedPassword is missing');
+                // ตรวจสอบว่า password และ hashedPassword มีค่า
+                if (!password || !hashedPassword) {
+                    console.error('Error: password or hashedPassword is missing');
                     return res.render('login', {
                         login_errors: ['An error occurred. Please try again.']
                     });
                 }
 
-                bcrypt.compare(user_password, hashedPassword)
+                // เปรียบเทียบรหัสผ่าน
+                bcrypt.compare(password, hashedPassword)
                 .then(compare_result => {
                     if(compare_result === true){
                         req.session.isLoggedIn = true;
-                        req.session.userID = rows[0].user_id;
+                        req.session.userID = rows[0].id_number;  // ใช้ `id_number` แทน `user_id`
                         res.redirect('/');
                     }
                     else{
@@ -170,7 +172,7 @@ app.post('/', ifLoggedin, [
                 });
             } else {
                 res.render('login', {
-                    login_errors: ['Invalid User ID!']
+                    login_errors: ['Invalid ID Number!']
                 });
             }
         }).catch(err => {
@@ -187,6 +189,7 @@ app.post('/', ifLoggedin, [
         });
     }
 });
+
 
 // LOGOUT
 app.get('/logout', (req, res) => {
