@@ -72,7 +72,7 @@
         <div class="main p-3">
             <div class="text-center">
                 <h1>
-                    Main
+                    หน้าหลัก
                     <div class="row justify-content-center">
                         <div class="col-12 col-md-10 col-lg-8 text-center mb-5">
                             <div class="image-box d-flex align-items-center justify-content-center">
@@ -81,15 +81,16 @@
                         </div>
                     </div>                    
                     <div class="row justify-content-center">
-                        <!-- <% subjects.forEach(function(subject) { %> -->
-                        <div class="col-md-4 text-center border rounded-lg p-3 info-box">
-                            <button class="btn btn-outline-primary w-100 p-3" onclick="window.location.href='/subject/<%= subject.id %>/<%= subject.year %>'">
-                                <p>วิชา: </p> <!-- <p>วิชา: <%= subject.name %></p>  -->
-                                <p>ชั้นปี: </p>  <!-- <p>ชั้นปี: <%= subject.year %></p> -->
-                            </button>
-                        </div>
-                    <!-- <% }); %> -->
-                    </div>                                                                                   
+                        <% subjects.forEach(function(course) { %>
+                            <div class="col-md-4 text-center border rounded-lg p-3 info-box">
+                                <button class="btn btn-outline-primary w-100 p-3" onclick="window.location.href='/students/<%= course.course_code %>/<%= course.section %>'">
+                                    <p>วิชา: <%= course.name %></p>
+                                    <p>ชั้นปี: <%= course.year %></p>
+                                    <p>Section: <%= course.section %></p>
+                                </button>
+                            </div>
+                        <% }); %>
+                    </div>                                                                        
                 </h1>
             </div>
         </div>
@@ -99,5 +100,4 @@
         crossorigin="anonymous"></script>
     <script src="Sidebar.js"></script>
 </body>
-
 </html>
