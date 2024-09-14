@@ -524,4 +524,72 @@ router.put('/api/attendance-rules/:id', ifNotLoggedIn, async (req, res) => {
     }
 });
 
+//---------------------------------------------------------------------
+//app
+router.post('/login', async (req, res) => {
+    const { id_number, password } = req.body;
+
+    if (!id_number || !password) {
+        return res.status(400).json({ success: false, error: 'ID number and password are required' });
+    }
+
+    try {
+        const [rows] = await dbConnection.execute("SELECT * FROM users WHERE id_number = ?", [id_number]);
+
+        if (rows.length > 0) {
+            const user = rows[0];
+            const isMatch = await bcrypt.compare(password, user.password);
+
+            if (isMatch) {
+                req.session.isLoggedIn = true;
+                req.session.userID = user.id_number;
+                req.session.role = user.role;
+
+                return res.status(200).json({
+                    success: true,
+                    message: 'Login successful',
+                    user: {
+                        id_number: user.id_number,
+                        first_name: user.first_name,
+                        last_name: user.last_name,
+                        role: user.role
+                    }
+                });
+            } else {
+                return res.status(401).json({ success: false, error: 'Invalid password' });
+            }
+        } else {
+            return res.status(401).json({ success: false, error: 'Invalid ID number' });
+        }
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ success: false, error: 'An error occurred during login' });
+    }
+});
+
+router.post('/log_attendance', async (req, res) => {
+    const { id_number, major, minor, schedule_date, schedule_time } = req.body;
+
+    if (!id_number || major === undefined || minor === undefined || !schedule_date || !schedule_time) {
+        return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    try {
+        const [result] = await dbConnection.execute(
+            'INSERT INTO log_attendance (id_number, major, minor, schedule_date, schedule_time) VALUES (?, ?, ?, ?, ?)',
+            [id_number, major, minor, schedule_date, schedule_time]
+        );
+
+        console.log('Attendance recorded:', { id_number, major, minor, schedule_date, schedule_time, insertId: result.insertId });
+
+        res.status(200).json({
+            message: 'Attendance recorded successfully',
+            recordId: result.insertId
+        });
+    } catch (error) {
+        console.error('Error recording attendance:', error);
+        res.status(500).json({ error: 'Failed to record attendance' });
+    }
+});
+
 module.exports = router;
