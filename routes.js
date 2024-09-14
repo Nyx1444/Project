@@ -84,6 +84,15 @@ const ownsCourseFromBody = async (req, res, next) => {
 };
 
 // Route definitions
+// REGISTER
+router.get('/register', (req, res) => {
+    res.render('register');
+});
+
+// / Page
+router.get('/login',(req,res)=>{
+    res.render('login');
+});
 
 // Root page
 router.get('/', ifLoggedin, (req, res) => {
@@ -97,6 +106,7 @@ router.get('/home', ifNotLoggedIn, async (req, res) => {
         return res.redirect('/login');
     }
     try {
+        // ดึงข้อมูล role ของผู้ใช้
         const [[user]] = await dbConnection.execute('SELECT role FROM users WHERE id_number = ?', [teacherId]);
         if (!user || user.role !== 'teacher') {
             return res.status(403).send('Forbidden: Only teachers can access this page');
@@ -112,17 +122,33 @@ router.get('/home', ifNotLoggedIn, async (req, res) => {
 
         const courses = rows.map(row => ({
             course_code: row.course_code,
+            course_name: row.course_name,
             name: `${row.course_code} - ${row.course_name}`,
             year: row.year,
             section: row.section
         }));
 
-        res.render('home', { subjects: courses });
+        // ดึงรูปภาพตารางสอนที่สัมพันธ์กับอาจารย์
+        const [[scheduleImage]] = await dbConnection.execute(`
+            SELECT schedule_image_url 
+            FROM teacher_schedule_images 
+            WHERE teacher_id = ?
+        `, [teacherId]);
+
+        // ส่ง URL รูปภาพไปยัง view ด้วย ถ้าไม่มีรูปภาพให้ใช้ค่าเริ่มต้น
+        const scheduleImageUrl = scheduleImage ? scheduleImage.schedule_image_url : '/images/default_schedule.png';
+
+        // ส่งข้อมูลไปที่ view
+        res.render('home', { 
+            subjects: courses,
+            scheduleImageUrl: scheduleImageUrl  // ส่ง URL ของรูปภาพตารางสอนไปด้วย
+        });
     } catch (err) {
         console.error(err);
         res.status(500).send('An error occurred');
     }
 });
+
 
 // REGISTER
 router.post('/register', [
@@ -161,7 +187,7 @@ router.post('/register', [
 });
 
 // Login
-router.post('/', [
+router.post('/',[
     body('id_number').trim().not().isEmpty().withMessage('ID Number cannot be empty!'),
     body('password').trim().not().isEmpty().withMessage('Password cannot be empty!'),
 ], async (req, res) => {
@@ -215,9 +241,10 @@ router.get('/Classroom', ifNotLoggedIn, async (req, res) => {
             JOIN course_teachers ct ON c.course_code = ct.course_code AND c.section = ct.section
             WHERE ct.teacher_id = ?
         `, [teacherId]);
-
+        
         const courses = rows.map(row => ({
             course_code: row.course_code,
+            course_name: row.course_name,
             name: `${row.course_code} - ${row.course_name}`,
             year: row.year,
             section: row.section
@@ -232,7 +259,7 @@ router.get('/Classroom', ifNotLoggedIn, async (req, res) => {
 
 // Student list
 // Route แสดงรายการนักเรียนและการเช็คชื่อ
-router.get('/students/:courseCode/:section', ifNotLoggedIn, ownsCourse, async (req, res) => {
+router.get('/students_class/:courseCode/:section', ifNotLoggedIn, ownsCourse, async (req, res) => {
     const { courseCode, section } = req.params;
 
     try {
@@ -350,18 +377,32 @@ router.get('/students/:courseCode/:section/edit', ifNotLoggedIn, ownsCourse, asy
 //----------------------------------------------------//
 
 // Get attendance rules
-router.get('/api/attendance-rules/:courseCode/:section', ifNotLoggedIn, ownsCourse, async (req, res) => {
+router.get('/attendance-rules/:courseCode/:section', ifNotLoggedIn, ownsCourse, async (req, res) => {
     const { courseCode, section } = req.params;
     try {
+        const [[course]] = await dbConnection.execute(`
+            SELECT course_name FROM courses WHERE course_code = ? AND section = ?
+        `, [courseCode, section]);
+
         const [rules] = await dbConnection.execute(`
-            SELECT * FROM attendance_rules
+            SELECT id, course_code, section, 
+                   DATE_FORMAT(date, '%d/%m/%Y') as display_date,
+                   DATE_FORMAT(date, '%Y-%m-%d') as edit_date, 
+                   present_until, late_until
+            FROM attendance_rules
             WHERE course_code = ? AND section = ?
             ORDER BY date
         `, [courseCode, section]);
-        res.json(rules);
+
+        res.render('AttendanceRules', { 
+            courseCode,
+            section,
+            courseName: course ? course.course_name : "Unknown Course",
+            attendanceRules: rules
+        });
     } catch (error) {
-        console.error('Error fetching attendance rules:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
+        console.error('Error:', error);
+        res.status(500).send('Internal Server Error');
     }
 });
 
@@ -463,6 +504,23 @@ router.post('/save-attendance', ifNotLoggedIn, ownsCourse, async (req, res) => {
     } catch (error) {
         console.error('Error saving attendance:', error);
         res.status(500).json({ success: false, error: 'Internal Server Error' });
+    }
+});
+
+// Edit antendance
+router.put('/api/attendance-rules/:id', ifNotLoggedIn, async (req, res) => {
+    const { id } = req.params;
+    const { courseCode, section, date, presentUntil, lateUntil } = req.body;
+    try {
+        await dbConnection.execute(`
+            UPDATE attendance_rules 
+            SET date = ?, present_until = ?, late_until = ?
+            WHERE id = ? AND course_code = ? AND section = ?
+        `, [date, presentUntil, lateUntil, id, courseCode, section]);
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Error updating attendance rule:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
     }
 });
 

@@ -76,17 +76,17 @@
                     <div class="row justify-content-center">
                         <div class="col-12 col-md-10 col-lg-8 text-center mb-5">
                             <div class="image-box d-flex align-items-center justify-content-center">
-                                <img src="/image/im.png" alt="Test Image" class="img-fluid">
+                                <img src="<%= scheduleImageUrl %>"style="max-width: 100%; height: auto;" />
                             </div>
                         </div>
                     </div>                    
                     <div class="row justify-content-center">
                         <% subjects.forEach(function(course) { %>
                             <div class="col-md-4 text-center border rounded-lg p-3 info-box">
-                                <button class="btn btn-outline-primary w-100 p-3" onclick="window.location.href='/students/<%= course.course_code %>/<%= course.section %>'">
-                                    <p>วิชา: <%= course.name %></p>
-                                    <p>ชั้นปี: <%= course.year %></p>
-                                    <p>Section: <%= course.section %></p>
+                                <button class="btn btn-outline-primary w-100 p-3" onclick="window.location.href='/students_class/<%= course.course_code %>/<%= course.section %>'">
+                                    <p class="mb-0">วิชา : <%= course.course_name %></p>
+                                        <p class="mb-0">รหัสวิชา : <%= course.course_code %> [<%= course.section %>]</p>
+                                        <p>ชั้นปี: <%= course.year %></p>
                                 </button>
                             </div>
                         <% }); %>
