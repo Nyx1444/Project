@@ -246,3 +246,31 @@ th, td {
 .attendance-header span {
     display: block;
 }
+.bg-success {
+    background-color: #28a745;
+    color: #fff;
+    padding: 10px;
+    text-align: left;
+}
+
+.bg-warning {
+    background-color: #ffc107;
+    color: #fff;
+    padding: 10px;
+    text-align: left;
+}
+
+.bg-danger {
+    background-color: #dc3545;
+    color: #fff;
+    padding: 10px;
+    text-align: left;
+}
+
+/* เพิ่มขอบตัวอักษรสีดำ และข้อความข้างในเป็นสีขาว */
+.text-white-outline {
+    color: white;
+    font-weight: bold;
+    font-size: 1.1em;
+    text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000; /* เพิ่มขอบตัวอักษรสีดำ */
+}
