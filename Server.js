@@ -1,7 +1,6 @@
 const express = require('express');
 const path = require('path');
 const cookieSession = require('cookie-session');
-const cors = require('cors'); // Middleware for handling CORS
 const routes = require('./routes');
 const dbConnection = require('./dbConnection');
 const app = express();
@@ -40,11 +39,5 @@ app.use((req, res) => {
     res.status(404).send('<h1>404 Page Not Found!</h1>');
 });
 
-// cors
-app.use(cors({
-    origin: '*', // Allow requests from any origin. You can restrict this if needed.
-    methods: ['GET', 'POST'], // Only allow GET and POST requests.
-    allowedHeaders: ['Content-Type'], // Allow specific headers.
-}));
 // Start server
 app.listen(4000, () => console.log("Server is running on http://localhost:4000"));

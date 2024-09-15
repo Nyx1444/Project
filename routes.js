@@ -4,7 +4,7 @@ const router = express.Router();
 const bcrypt = require('bcrypt');
 const { body, validationResult } = require('express-validator');
 const dbConnection = require('./dbConnection');
-const cron = require('node-cron');
+const { parseISO, isAfter, formatISO } = require('date-fns');
 
 // Middleware
 const ifNotLoggedIn = (req, res, next) => {
@@ -15,7 +15,7 @@ const ifNotLoggedIn = (req, res, next) => {
 };
 
 const ifLoggedin = (req, res, next) => {
-    if (req.session.isLoggedIn)  {
+    if (req.session.isLoggedIn) {
         return res.redirect('/home');
     }
     next();
@@ -23,7 +23,7 @@ const ifLoggedin = (req, res, next) => {
 
 const ownsCourse = async (req, res, next) => {
     const userId = req.session.userID;
-    
+
     // ตรวจสอบว่าพารามิเตอร์มาจาก req.params หรือ req.body
     const courseCode = req.params.courseCode || req.body.courseCode;
     const section = req.params.section || req.body.section;
@@ -39,7 +39,7 @@ const ownsCourse = async (req, res, next) => {
             SELECT c.course_code, c.section
             FROM courses c
             JOIN course_teachers ct ON c.course_code = ct.course_code AND c.section = ct.section
-            WHERE c.course_code = ? AND c.section = ? AND ct.teacher_id = ?`, 
+            WHERE c.course_code = ? AND c.section = ? AND ct.teacher_id = ?`,
             [courseCode, section, userId]
         );
 
@@ -69,7 +69,7 @@ const ownsCourseFromBody = async (req, res, next) => {
             SELECT c.course_code, c.section
             FROM courses c
             JOIN course_teachers ct ON c.course_code = ct.course_code AND c.section = ct.section
-            WHERE c.course_code = ? AND c.section = ? AND ct.teacher_id = ?`, 
+            WHERE c.course_code = ? AND c.section = ? AND ct.teacher_id = ?`,
             [courseCode, section, userId]
         );
 
@@ -91,7 +91,7 @@ router.get('/register', (req, res) => {
 });
 
 // / Page
-router.get('/login',(req,res)=>{
+router.get('/login', (req, res) => {
     res.render('login');
 });
 
@@ -140,7 +140,7 @@ router.get('/home', ifNotLoggedIn, async (req, res) => {
         const scheduleImageUrl = scheduleImage ? scheduleImage.schedule_image_url : '/images/default_schedule.png';
 
         // ส่งข้อมูลไปที่ view
-        res.render('home', { 
+        res.render('home', {
             subjects: courses,
             scheduleImageUrl: scheduleImageUrl  // ส่ง URL ของรูปภาพตารางสอนไปด้วย
         });
@@ -188,7 +188,7 @@ router.post('/register', [
 });
 
 // Login
-router.post('/',[
+router.post('/', [
     body('id_number').trim().not().isEmpty().withMessage('ID Number cannot be empty!'),
     body('password').trim().not().isEmpty().withMessage('Password cannot be empty!'),
 ], async (req, res) => {
@@ -242,7 +242,7 @@ router.get('/Classroom', ifNotLoggedIn, async (req, res) => {
             JOIN course_teachers ct ON c.course_code = ct.course_code AND c.section = ct.section
             WHERE ct.teacher_id = ?
         `, [teacherId]);
-        
+
         const courses = rows.map(row => ({
             course_code: row.course_code,
             course_name: row.course_name,
@@ -259,11 +259,14 @@ router.get('/Classroom', ifNotLoggedIn, async (req, res) => {
 });
 
 // Student list
-// Route แสดงรายการนักเรียนและการเช็คชื่อ
-router.get('/students/:courseCode/:section', ifNotLoggedIn, ownsCourse, async (req, res) => {
+// Route สำหรับแสดงผลข้อมูลในหน้าเว็บ
+router.get('/students_class/:courseCode/:section', ifNotLoggedIn, ownsCourse, async (req, res) => {
     const { courseCode, section } = req.params;
 
     try {
+        // เรียกฟังก์ชันเพื่อตรวจสอบการเช็คชื่อ
+        await scheduleAttendanceCheck();
+
         // ดึงข้อมูลนักเรียน
         const [students] = await dbConnection.execute(`
             SELECT s.id_number, u.first_name, u.last_name
@@ -275,7 +278,7 @@ router.get('/students/:courseCode/:section', ifNotLoggedIn, ownsCourse, async (r
 
         // ดึงข้อมูลกฎการเช็คชื่อ
         const [rules] = await dbConnection.execute(`
-            SELECT date, DATE_FORMAT(date, '%d/%m/%y') AS short_date
+            SELECT date, DATE_FORMAT(date, '%d/%m/%Y') AS short_date
             FROM attendance_rules
             WHERE course_code = ? AND section = ?
             ORDER BY date
@@ -287,19 +290,31 @@ router.get('/students/:courseCode/:section', ifNotLoggedIn, ownsCourse, async (r
             FROM attendance
             WHERE course_code = ? AND section = ?
         `, [courseCode, section]);
-        
-        // Map ข้อมูล attendance เข้าไปใน student object พร้อมทั้ง check_in_time
+
+        // จัดรูปแบบข้อมูลเพื่อส่งไปแสดงผลในหน้าเว็บ
         const studentsWithAttendance = students.map(student => {
             const studentAttendance = rules.map(rule => {
-                const attendance = attendances.find(a => 
-                    a.student_id === student.id_number && 
+                const attendance = attendances.find(a =>
+                    a.student_id === student.id_number &&
                     a.date.toISOString().split('T')[0] === rule.date.toISOString().split('T')[0]
                 );
-                return attendance ? { status: attendance.status, check_in_time: attendance.check_in_time } : null;
+                return attendance ? attendance.status : null;
             });
-            return { ...student, attendance: studentAttendance };
+
+            const checkInTimes = rules.map(rule => {
+                const attendance = attendances.find(a =>
+                    a.student_id === student.id_number &&
+                    a.date.toISOString().split('T')[0] === rule.date.toISOString().split('T')[0]
+                );
+                return attendance ? attendance.check_in_time : null;
+            });
+
+            return {
+                ...student,
+                attendance: studentAttendance,
+                check_in_times: checkInTimes
+            };
         });
-        
 
         const [[course]] = await dbConnection.execute(`
             SELECT course_name FROM courses WHERE course_code = ? AND section = ?
@@ -321,11 +336,10 @@ router.get('/students/:courseCode/:section', ifNotLoggedIn, ownsCourse, async (r
     }
 });
 
-
 // Student list edit route
 router.get('/students/:courseCode/:section/edit', ifNotLoggedIn, ownsCourse, async (req, res) => {
     const { courseCode, section } = req.params;
-    
+
     try {
         const [students] = await dbConnection.execute(`
             SELECT s.id_number, u.first_name, u.last_name
@@ -350,8 +364,8 @@ router.get('/students/:courseCode/:section/edit', ifNotLoggedIn, ownsCourse, asy
 
         const studentsWithAttendance = students.map(student => {
             const studentAttendance = rules.map(rule => {
-                const attendance = attendances.find(a => 
-                    a.student_id === student.id_number && 
+                const attendance = attendances.find(a =>
+                    a.student_id === student.id_number &&
                     a.date.toISOString().split('T')[0] === rule.date.toISOString().split('T')[0]
                 );
                 return attendance ? attendance.status : null;
@@ -396,7 +410,7 @@ router.get('/attendance-rules/:courseCode/:section', ifNotLoggedIn, ownsCourse, 
             ORDER BY date
         `, [courseCode, section]);
 
-        res.render('AttendanceRules', { 
+        res.render('AttendanceRules', {
             courseCode,
             section,
             courseName: course ? course.course_name : "Unknown Course",
@@ -438,6 +452,7 @@ router.delete('/api/attendance-rules/:id', ifNotLoggedIn, async (req, res) => {
     }
 });
 
+
 // Attendance Rules page
 router.get('/attendance-rules/:courseCode/:section', ifNotLoggedIn, ownsCourse, async (req, res) => {
     const { courseCode, section } = req.params;
@@ -452,7 +467,7 @@ router.get('/attendance-rules/:courseCode/:section', ifNotLoggedIn, ownsCourse, 
             ORDER BY date
         `, [courseCode, section]);
 
-        res.render('AttendanceRules', { 
+        res.render('AttendanceRules', {
             courseCode,
             section,
             courseName: course ? course.course_name : "Unknown Course",
@@ -464,78 +479,121 @@ router.get('/attendance-rules/:courseCode/:section', ifNotLoggedIn, ownsCourse, 
     }
 });
 
+
+// Save attendance
 router.post('/save-attendance', ifNotLoggedIn, ownsCourse, async (req, res) => {
     const { courseCode, section, attendance } = req.body;
 
+    // ตรวจสอบว่ามีข้อมูลที่จำเป็นหรือไม่
+    if (!courseCode || !section || !attendance) {
+        console.error('Missing required fields:', { courseCode, section, attendance });
+        return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+
     try {
-        // บันทึกสถานะที่เช็คชื่อ
+        // ลูปผ่านข้อมูลการเช็คชื่อของนักเรียนแต่ละคน
         for (const [studentId, dates] of Object.entries(attendance)) {
             for (const [date, status] of Object.entries(dates)) {
                 if (status) {
+                    // ตรวจสอบว่ามีกฎการเช็คชื่อในรายวิชาหรือไม่
                     const [[rule]] = await dbConnection.execute(`
                         SELECT * FROM attendance_rules
                         WHERE course_code = ? AND section = ? AND date = ?
                     `, [courseCode, section, date]);
 
-                    let calculatedStatus = status;
-                    if (rule) {
-                        const now = new Date();  // เวลาปัจจุบัน
-                        const presentUntil = new Date(`${date}T${rule.present_until}`);
-                        const lateUntil = new Date(`${date}T${rule.late_until}`);
-
-                        if (now <= presentUntil) {
-                            calculatedStatus = 'present';  // มาทันเวลา
-                        } else if (now <= lateUntil) {
-                            calculatedStatus = 'late';  // มาสาย
-                        } else {
-                            calculatedStatus = 'absent';  // ขาดเรียน
-                        }
+                    if (!rule) {
+                        console.log('No attendance rule found for date:', date);
+                        continue;
                     }
 
-                    await dbConnection.execute(`
+                    let calculatedStatus = status;
+                    const presentUntil = new Date(`${date}T${rule.present_until}`);
+                    const lateUntil = new Date(`${date}T${rule.late_until}`);
+                    const now = new Date();  // เวลาปัจจุบัน
+
+                    console.log('now:', now);
+                    console.log('presentUntil:', presentUntil);
+                    console.log('lateUntil:', lateUntil);
+
+                    if (now <= presentUntil) {
+                        calculatedStatus = 'present';  // มาทันเวลา
+                    } else if (now <= lateUntil) {
+                        calculatedStatus = 'late';  // มาสาย
+                    } else {
+                        calculatedStatus = 'absent';  // ขาดเรียน
+                    }
+
+                    // บันทึกหรืออัปเดตข้อมูลการเช็คชื่อ
+                    const [result] = await dbConnection.execute(`
                         INSERT INTO attendance (course_code, section, student_id, date, status)
                         VALUES (?, ?, ?, ?, ?)
                         ON DUPLICATE KEY UPDATE status = ?
                     `, [courseCode, section, studentId, date, calculatedStatus, calculatedStatus]);
+
+                    console.log('Attendance updated for student:', studentId, result);
                 }
             }
         }
 
-        // เพิ่มส่วนการอัปเดตนักเรียนที่ไม่มีการเช็คชื่อว่าเป็นขาด
-        const [students] = await dbConnection.execute(`
-            SELECT s.id_number
-            FROM students s
-            JOIN enrollments e ON s.id_number = e.student_id
-            WHERE e.course_code = ? AND e.section = ?
-        `, [courseCode, section]);
-
+        // ตรวจสอบว่าเวลาปัจจุบันเกิน late_until แล้วหรือไม่
         const [[rule]] = await dbConnection.execute(`
             SELECT * FROM attendance_rules
-            WHERE course_code = ? AND section = ? AND date = ?
-        `, [courseCode, section, new Date().toISOString().split('T')[0]]);  // คำนวณวันที่ปัจจุบัน
+            WHERE course_code = ? AND section = ?
+        `, [courseCode, section]);
 
-        if (rule) {
-            const lateUntil = new Date(`${rule.date}T${rule.late_until}`);
-            const now = new Date();
-
-            if (now > lateUntil) {  // เช็คเวลาหมดเวลาเช็คชื่อ
-                for (const student of students) {
-                    const [attendances] = await dbConnection.execute(`
-                        SELECT * FROM attendance
-                        WHERE student_id = ? AND course_code = ? AND section = ? AND date = ?
-                    `, [student.id_number, courseCode, section, rule.date]);
-
-                    if (attendances.length === 0) {  // ถ้าไม่มีการเช็คชื่อ
-                        await dbConnection.execute(`
-                            INSERT INTO attendance (course_code, section, student_id, date, status)
-                            VALUES (?, ?, ?, ?, 'absent')
-                            ON DUPLICATE KEY UPDATE status = 'absent'
-                        `, [courseCode, section, student.id_number, rule.date]);
-                    }
-                }
-            }
+        if (!rule) {
+            console.log('No rule found for course:', courseCode, 'section:', section);
+            return res.status(400).json({ success: false, error: 'No attendance rule found' });
         }
 
+        const lateUntil = new Date(`${rule.date}T${rule.late_until}`);
+        const now = new Date(); // เวลาปัจจุบัน
+        console.log('Current server time:', now);
+        console.log('Late until time:', lateUntil);
+
+        if (now > lateUntil) {
+            console.log('Current time is after late_until, marking absents immediately');
+
+            // ดึงรายชื่อนักเรียนทั้งหมดในรายวิชานี้
+            const [students] = await dbConnection.execute(`
+                SELECT student_id FROM enrollments WHERE course_code = ? AND section = ?
+            `, [courseCode, section]);
+
+            if (students.length === 0) {
+                console.log('No students found for this course and section.');
+                return res.status(400).json({ success: false, error: 'No students found' });
+            }
+
+            console.log('Students to be checked for absent:', students);
+
+            for (const student of students) {
+                const studentId = student.student_id;
+
+                // ตรวจสอบว่านักเรียนคนนี้มีการเช็คชื่อในวันนี้แล้วหรือยัง
+                const [[existingAttendance]] = await dbConnection.execute(`
+                    SELECT * FROM attendance WHERE course_code = ? AND section = ? AND student_id = ? AND date = ?
+                `, [courseCode, section, studentId, rule.date]);
+
+                if (!existingAttendance) {
+                    console.log('Student', studentId, 'has not checked in, marking as absent');
+                    // บันทึกสถานะ absent สำหรับนักเรียนที่ไม่ได้เช็คชื่อ
+                    const [result] = await dbConnection.execute(`
+                        INSERT INTO attendance (course_code, section, student_id, date, status)
+                        VALUES (?, ?, ?, ?, 'absent')
+                    `, [courseCode, section, studentId, rule.date]);
+
+                    console.log('Marked student as absent:', studentId, result);
+                } else {
+                    console.log('Student', studentId, 'has already checked in');
+                }
+            }
+
+            console.log('Absents have been recorded immediately after late_until.');
+        } else {
+            console.log('Current time is before late_until, no action taken.');
+        }
+
+        // ส่งการตอบกลับเมื่อบันทึกสำเร็จ
         res.json({ success: true });
     } catch (error) {
         console.error('Error saving attendance:', error);
@@ -543,58 +601,149 @@ router.post('/save-attendance', ifNotLoggedIn, ownsCourse, async (req, res) => {
     }
 });
 
+// ฟังก์ชันตรวจสอบการเข้าเรียน
+function checkAttendance(currentTime, lateUntilTime, courseId, sectionId) {
+    const parsedCurrentTime = parseISO(currentTime);
+    const parsedLateUntilTime = parseISO(lateUntilTime);
 
-cron.schedule('* * * * *', async () => {
-    const now = new Date();
-    console.log('Cron job is running at:', now);  // ตรวจสอบว่า cron job ถูกเรียกใช้งาน
+    console.log(`Current server time: ${formatISO(parsedCurrentTime)}`);
+    console.log(`Late until time for course ${courseId}, section ${sectionId}: ${formatISO(parsedLateUntilTime)}`);
+
+    if (isAfter(parsedCurrentTime, parsedLateUntilTime)) {
+        console.log(`Late_until has passed for course ${courseId}, section ${sectionId}. Checking attendance now.`);
+        return true;
+    } else {
+        console.log(`Still within attendance time for course ${courseId}, section ${sectionId}.`);
+        return false;
+    }
+}
+
+// ฟังก์ชันเพื่อแปลงวันที่จาก YYYY-MM-DD เป็น DD/MM/YYYY
+function formatDate(date) {
+    const d = new Date(date);
+    let day = d.getDate();
+    let month = d.getMonth() + 1; // เดือนเริ่มที่ 0 ใน JavaScript
+    const year = d.getFullYear();
+
+    if (day < 10) {
+        day = '0' + day;
+    }
+    if (month < 10) {
+        month = '0' + month;
+    }
+
+    return `${day}/${month}/${year}`;
+}
+
+// ฟังก์ชันเพื่อแปลงเวลาเป็น HH:MM:SS
+function formatTime(time) {
+    // ตรวจสอบว่า time เป็นชนิดข้อมูลที่สามารถใช้ split ได้
+    if (typeof time === 'string') {
+        const [hours, minutes, seconds] = time.split(':');
+        return `${hours}:${minutes}:${seconds}`;
+    } else if (time instanceof Date) {
+        // ถ้าเป็น Date object ให้แปลงเป็นรูปแบบ HH:MM:SS
+        return time.toTimeString().split(' ')[0];
+    } else {
+        throw new TypeError('Invalid time format');
+    }
+}
+// แก้ไขฟังก์ชัน checkAttendance เพื่อใช้ scheduleAttendanceCheck
+function checkAttendance(currentTime, lateUntilTime, courseId, sectionId) {
+    const parsedCurrentTime = parseISO(currentTime);
+    const parsedLateUntilTime = parseISO(lateUntilTime);
+
+    console.log(`Current server time: ${formatISO(parsedCurrentTime)}`);
+    console.log(`Late until time for course ${courseId}, section ${sectionId}: ${formatISO(parsedLateUntilTime)}`);
+
+    if (isAfter(parsedCurrentTime, parsedLateUntilTime)) {
+        console.log(`Late_until has passed for course ${courseId}, section ${sectionId}. Checking attendance now.`);
+        return true;
+    } else {
+        console.log(`Still within attendance time for course ${courseId}, section ${sectionId}.`);
+        return false;
+    }
+}
+let isProcessing = false;
+
+const scheduleAttendanceCheck = async () => {
+    // ตรวจสอบว่ากำลังประมวลผลอยู่หรือไม่
+    if (isProcessing) {
+        console.log('Attendance check is already in progress. Skipping.');
+        return;
+    }
+
+    isProcessing = true;
+
     try {
-        // ดึงรายวิชาที่มีการตั้งเวลา attendance rule
-        const [courses] = await dbConnection.execute(`
-            SELECT course_code, section, date, late_until 
-            FROM attendance_rules 
+        const now = new Date();
+        console.log(`Current server time: ${formatISO(now)}`);
+
+        const [rules] = await dbConnection.execute(`
+            SELECT *, DATE_FORMAT(date, '%Y-%m-%d') AS formatted_date
+            FROM attendance_rules
             WHERE date = CURDATE()
         `);
 
-        console.log('Courses found:', courses);  // ตรวจสอบว่ามี course ที่ต้องอัปเดต
+        if (rules.length === 0) {
+            console.log('No attendance rules found for today.');
+            return;
+        }
 
-        for (const course of courses) {
-            // แยกข้อมูลเวลา late_until ออกเป็นชั่วโมง นาที และวินาที
-            const [hours, minutes, seconds] = course.late_until.split(':');
-            
-            // สร้าง lateUntil ใหม่ โดยใช้วันที่จาก course.date และเวลาจาก late_until
-            const lateUntil = new Date(course.date); // เริ่มต้นที่วันที่จาก course.date
-            lateUntil.setHours(hours, minutes, seconds); // ตั้งค่าเวลาเป็น late_until
-        
-            console.log('Late until:', lateUntil, 'Now:', now);
-        
-            if (now > lateUntil) {
-                console.log('Late until passed for course:', course.course_code);
-        
-                // อัปเดตสถานะเป็น 'absent'
-                await dbConnection.execute(`
-                    INSERT INTO attendance (course_code, section, student_id, date, status)
-                    SELECT ?, ?, e.student_id, ?, 'absent'
-                    FROM enrollments e
-                    WHERE e.course_code = ? 
-                      AND e.section = ?
-                      AND NOT EXISTS (
-                          SELECT 1 FROM attendance a 
-                          WHERE a.course_code = e.course_code 
-                            AND a.section = e.section 
-                            AND a.student_id = e.student_id 
-                            AND a.date = ?
-                      )
-                `, [course.course_code, course.section, course.date, course.course_code, course.section, course.date]);
-        
-                console.log('Attendance updated to absent for course:', course.course_code);
+        for (const rule of rules) {
+            const ruleDate = parseISO(rule.formatted_date);
+            const lateUntil = new Date(ruleDate.getFullYear(), ruleDate.getMonth(), ruleDate.getDate(), 
+                                       ...rule.late_until.split(':').map(Number));
+
+            console.log(`Late until time for course ${rule.course_code}, section ${rule.section}: ${formatISO(lateUntil)}`);
+            console.log(`Current time (ms): ${now.getTime()}, Late until (ms): ${lateUntil.getTime()}`);
+
+            const timeUntilLate = lateUntil.getTime() - now.getTime();
+            console.log(`Time until late (ms): ${timeUntilLate}`);
+
+            if (timeUntilLate > 0) {
+                console.log(`Scheduling attendance check for course ${rule.course_code}, section ${rule.section} in ${timeUntilLate / 1000} seconds.`);
+                setTimeout(async () => {
+                    await markAbsentStudents(rule.course_code, rule.section, ruleDate);
+                }, timeUntilLate);
+            } else {
+                console.log(`Late_until has already passed for course ${rule.course_code}, section ${rule.section}. Checking attendance now.`);
+                await markAbsentStudents(rule.course_code, rule.section, ruleDate);
             }
         }
-        
-        
     } catch (error) {
-        console.error('Error running cron job:', error);
+        console.error('Error scheduling attendance check:', error);
+    } finally {
+        isProcessing = false;
     }
-});
+};
+
+const markAbsentStudents = async (courseCode, section, date) => {
+    try {
+        const [students] = await dbConnection.execute(`
+            SELECT e.student_id 
+            FROM enrollments e
+            LEFT JOIN attendance a ON e.student_id = a.student_id 
+                AND a.course_code = ? AND a.section = ? AND a.date = ?
+            WHERE e.course_code = ? AND e.section = ? AND a.id IS NULL
+        `, [courseCode, section, date, courseCode, section]);
+
+        for (const student of students) {
+            await dbConnection.execute(`
+                INSERT INTO attendance (course_code, section, student_id, date, status)
+                VALUES (?, ?, ?, ?, 'absent')
+            `, [courseCode, section, student.student_id, date]);
+            console.log(`Marked student ${student.student_id} as absent for ${courseCode}, section ${section} on ${formatISO(date)}`);
+        }
+
+        if (students.length === 0) {
+            console.log(`No new absences to record for ${courseCode}, section ${section} on ${formatISO(date)}`);
+        }
+    } catch (error) {
+        console.error('Error marking absent students:', error);
+    }
+};
+
 
 
 // Edit antendance
@@ -614,84 +763,79 @@ router.put('/api/attendance-rules/:id', ifNotLoggedIn, async (req, res) => {
     }
 });
 
-// Route สำหรับหน้า calculate ที่ให้ผู้ใช้เลือกวิชาก่อน
-router.get('/calculate', ifNotLoggedIn, async (req, res) => {
+
+// Route สำหรับบันทึกการเข้าเรียน
+router.post('/log_attendance', async (req, res) => {
+    const { id_number, major, minor, schedule_date, schedule_time } = req.body;
+
+    if (!id_number || major === undefined || minor === undefined || !schedule_date || !schedule_time) {
+        return res.status(400).json({ error: 'Missing required fields' });
+    }
+
     try {
-        const teacherId = req.session.userID;
+        // ตรวจสอบ major, minor ตาม course_code ในตาราง course
+        const [[course]] = await dbConnection.execute(
+            'SELECT course_code, section FROM courses WHERE major = ? AND minor = ?',
+            [major, minor]
+        );
 
-        // ดึงรายชื่อวิชาที่ผู้ใช้สอน
-        const [courses] = await dbConnection.execute(`
-            SELECT c.course_code, c.course_name, c.section, c.year
-            FROM courses c
-            JOIN course_teachers ct ON c.course_code = ct.course_code AND c.section = ct.section
-            WHERE ct.teacher_id = ?
-        `, [teacherId]);
+        if (!course) {
+            return res.status(400).json({ error: 'Invalid major or minor' });
+        }
 
-        res.render('calculate', {  // เปลี่ยนเป็น calculate_course
-            courses: courses
+        const { course_code, section } = course;
+
+        // ตรวจสอบกฎการเช็คชื่อในตาราง attendance_rules
+        const [[rule]] = await dbConnection.execute(
+            `SELECT * FROM attendance_rules
+            WHERE course_code = ? AND section = ? AND date = ?`,
+            [course_code, section, schedule_date]
+        );
+
+        let calculatedStatus = 'absent'; // ตั้งค่าเริ่มต้น
+
+        if (rule) {
+            // คำนวณสถานะการเช็คชื่อ
+            const presentUntil = new Date(`${schedule_date}T${rule.present_until}`);
+            const lateUntil = new Date(`${schedule_date}T${rule.late_until}`);
+            const now = new Date(`${schedule_date}T${schedule_time}`);
+
+            if (now <= presentUntil) {
+                calculatedStatus = 'present'; // มาทันเวลา
+            } else if (now <= lateUntil) {
+                calculatedStatus = 'late'; // มาสาย
+            } else {
+                calculatedStatus = 'absent'; // ขาดเรียน
+            }
+        }
+
+        // บันทึกการเช็คชื่อใน log_attendance
+        const [logResult] = await dbConnection.execute(
+            'INSERT INTO log_attendance (id_number, major, minor, schedule_date, schedule_time) VALUES (?, ?, ?, ?, ?)',
+            [id_number, major, minor, schedule_date, schedule_time]
+        );
+
+        // อัปเดตตาราง attendance พร้อมกับบันทึกเวลาที่เช็คชื่อ (check_in_time)
+        await dbConnection.execute(
+            `INSERT INTO attendance (course_code, section, student_id, date, status, check_in_time)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE status = ?, check_in_time = ?`,
+            [course_code, section, id_number, schedule_date, calculatedStatus, schedule_time, calculatedStatus, schedule_time]
+        );
+
+        // ส่งการตอบกลับเมื่อบันทึกสำเร็จ
+        res.status(200).json({
+            message: 'Attendance recorded and updated successfully',
+            logId: logResult.insertId
         });
+
     } catch (error) {
-        console.error('Error:', error);
-        res.status(500).send('Internal Server Error');
+        console.error('Error logging attendance:', error);
+        res.status(500).json({ error: 'Failed to record and update attendance' });
     }
 });
 
-// Route สำหรับการแสดงผลการเช็คชื่อของวิชาที่เลือก
-router.get('/calculate/:courseCode/:section', ifNotLoggedIn, async (req, res) => {
-    const { courseCode, section } = req.params;
-
-    try {
-        // ดึงข้อมูลนักเรียนในวิชาที่เลือก
-        const [students] = await dbConnection.execute(`
-            SELECT s.id_number, u.first_name, u.last_name
-            FROM students s
-            JOIN users u ON s.id_number = u.id_number
-            JOIN enrollments e ON s.id_number = e.student_id
-            WHERE e.course_code = ? AND e.section = ?
-        `, [courseCode, section]);
-
-        // ดึงข้อมูลกฎการเช็คชื่อ (เช่น date)
-        const [rules] = await dbConnection.execute(`
-            SELECT date, DATE_FORMAT(date, '%d/%m/%y') AS short_date
-            FROM attendance_rules
-            WHERE course_code = ? AND section = ?
-            ORDER BY date
-        `, [courseCode, section]);
-
-        // ดึงข้อมูลการเช็คชื่อ
-        const [attendances] = await dbConnection.execute(`
-            SELECT student_id, date, status
-            FROM attendance
-            WHERE course_code = ? AND section = ?
-        `, [courseCode, section]);
-
-        // จัดรูปแบบข้อมูลเพื่อส่งไปแสดงผลในหน้าเว็บ
-        const studentsWithAttendance = students.map(student => {
-            const studentAttendance = rules.map(rule => {
-                const attendance = attendances.find(a => 
-                    a.student_id === student.id_number && 
-                    a.date.toISOString().split('T')[0] === rule.date.toISOString().split('T')[0]
-                );
-                return attendance ? attendance.status : null;
-            });
-            return { ...student, attendance: studentAttendance };
-        });
-
-        res.render('calculate_course', {
-            students: studentsWithAttendance,
-            dates: rules.map(r => ({
-                short_date: r.short_date
-            })),
-            courseCode,
-            section
-        });
-    } catch (error) {
-        console.error('Error:', error);
-        res.status(500).send('Internal Server Error');
-    }
-});
-//---------------------------------------------------------------------
-//app
+// ล็อกอินแอพ
 router.post('/login', async (req, res) => {
     const { id_number, password } = req.body;
 
@@ -732,75 +876,4 @@ router.post('/login', async (req, res) => {
         return res.status(500).json({ success: false, error: 'An error occurred during login' });
     }
 });
-
-router.post('/log_attendance', async (req, res) => {
-    const { id_number, major, minor, schedule_date, schedule_time } = req.body;
-
-    if (!id_number || major === undefined || minor === undefined || !schedule_date || !schedule_time) {
-        return res.status(400).json({ error: 'Missing required fields' });
-    }
-
-    try {
-        // ตรวจสอบว่า major และ minor ที่ส่งมา ตรงกับข้อมูลในตาราง course หรือไม่
-        const [[course]] = await dbConnection.execute(
-            `SELECT * FROM courses WHERE major = ? AND minor = ?`,
-            [major, minor]
-        );
-
-        if (!course) {
-            return res.status(404).json({ error: 'No course found with the provided major and minor' });
-        }
-
-        // บันทึกข้อมูลลงในตาราง log_attendance ก่อน
-        const [result] = await dbConnection.execute(
-            'INSERT INTO log_attendance (id_number, major, minor, schedule_date, schedule_time) VALUES (?, ?, ?, ?, ?)',
-            [id_number, major, minor, schedule_date, schedule_time]
-        );
-
-        // ดึงข้อมูลจากตาราง attendance_rules เพื่อตรวจสอบเวลาการเช็คชื่อ
-        const [[attendanceRule]] = await dbConnection.execute(
-            `SELECT * FROM attendance_rules WHERE course_code = ? AND section = ? AND date = ?`,
-            [course.course_code, course.section, schedule_date]
-        );
-
-        if (!attendanceRule) {
-            return res.status(404).json({ error: 'No attendance rule found for this course and date' });
-        }
-
-        const presentUntil = new Date(`${schedule_date}T${attendanceRule.present_until}`);
-        const lateUntil = new Date(`${schedule_date}T${attendanceRule.late_until}`);
-        const checkTime = new Date(`${schedule_date}T${schedule_time}`);
-
-        let status = 'absent';  // ค่าเริ่มต้นเป็น absent (ขาดเรียน)
-
-        // ตรวจสอบเวลาการเช็คชื่อ
-        if (checkTime <= presentUntil) {
-            status = 'present';  // มาทันเวลา
-        } else if (checkTime <= lateUntil) {
-            status = 'late';  // มาสาย
-        }
-
-        // อัปเดตตาราง attendance ด้วยสถานะที่คำนวณได้
-        // อัปเดตตาราง attendance ด้วยสถานะที่คำนวณได้และบันทึกเวลาเข้าเรียน
-await dbConnection.execute(
-    `INSERT INTO attendance (course_code, section, student_id, date, status, check_in_time) 
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE status = ?, check_in_time = ?`,
-    [course.course_code, course.section, id_number, schedule_date, status, schedule_time, status, schedule_time]
-);
-
-
-        console.log('Attendance recorded and updated:', { id_number, major, minor, schedule_date, schedule_time, status });
-
-        res.status(200).json({
-            message: 'Attendance recorded and updated successfully',
-            recordId: result.insertId,
-            status: status
-        });
-    } catch (error) {
-        console.error('Error recording attendance:', error);
-        res.status(500).json({ error: 'Failed to record and update attendance' });
-    }
-});
-
 module.exports = router;
